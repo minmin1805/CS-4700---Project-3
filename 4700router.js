@@ -5,6 +5,19 @@ let relationshipMap = new Map();
 let socketMap = new Map();
 let asnNumber;
 
+const maskMap = new Map();
+maskMap.set("0", "00000000");
+maskMap.set("128", "10000000");
+maskMap.set("192", "11000000");
+maskMap.set("224", "11100000");
+maskMap.set("240", "11110000");
+maskMap.set("248", "11111000");
+maskMap.set("252", "11111100");
+maskMap.set("254", "11111110");
+maskMap.set("255", "11111111");
+
+
+
 const announcementStorage = [];
 
 function sendAnnouncementHelper(neighborIp, storedAnnouncement) {
@@ -146,6 +159,74 @@ function getParamsHelper() {
     }
 
     return {neighborsInfo};
+}
+
+function andMaskChecker(destinationId, network, netmask) {
+    const destinationIdArray = destinationId.split(".");
+    const networkArray = network.split(".");
+    const netmaskArray = netmask.split(".");
+    // and mask for destinationId and network if they are same then return true
+    const andMask = [];
+    for(let i = 0; i < 4; i++) {
+        andMask.push(maskMap.get(netmaskArray[i]));
+    }
+    const andMaskString = andMask.join("");
+    const desBinary = [];
+    for(let i = 0; i < 4; i++) {
+        let bits = Number(destinationIdArray[i]).toString(2);
+        while(bits.length < 8) {
+            bits = "0" + bits;
+        }
+        desBinary.push(bits);
+    }
+    const desBinaryString = desBinary.join("");
+
+    const networkBinary = [];
+    for(let i = 0; i < 4; i++) {
+        let bits = Number(networkArray[i]).toString(2);
+        while(bits.length < 8) {
+            bits = "0" + bits;
+        }
+        networkBinary.push(bits);
+    }
+    const networkBinaryString = networkBinary.join("");
+
+    // and for desBinaryString with andMaskString then compare with networkBinaryString with andMaskString
+    const desAndMask = [];
+    for(let i = 0; i < andMaskString.length; i++) {
+        desAndMask.push(desBinaryString[i] & andMaskString[i]);
+    }
+    const desAndMaskString = desAndMask.join("");
+    const networkAndMask = [];
+    for(let i = 0; i < andMaskString.length; i++) {
+        networkAndMask.push(networkBinaryString[i] & andMaskString[i]);
+    }
+    const networkAndMaskString = networkAndMask.join("");
+    if(desAndMaskString === networkAndMaskString) {
+        return true;
+    }
+    return false;
+}
+
+
+function handleDataHelper(neighborIp, receivedInfo) {
+    // level 1 version for now
+    // find the route that cover
+    const destinationId = receivedInfo.dst;
+    for(let i = 0; i < announcementStorage.length; i++) {
+        const announcement = announcementStorage[i];
+        if(andMaskChecker(destinationId, announcement.network, announcement.netmask)) {
+            const messageObject = {
+                src: receivedInfo.src,
+                dst: receivedInfo.dst,
+                type: "data",
+                msg: receivedInfo.msg,
+            }
+            const infoToSend = JSON.stringify(messageObject);
+            socketMap.get(announcement.peer).send(infoToSend, portsMap.get(announcement.peer), "127.0.0.1");
+            break;
+        }
+    }
 }
 
 
