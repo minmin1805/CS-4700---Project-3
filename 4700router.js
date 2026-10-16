@@ -1,4 +1,4 @@
-import dgram from "dgram";
+const dgram = require("dgram");
 
 let portsMap = new Map();
 let relationshipMap = new Map();
@@ -18,7 +18,7 @@ function sendAnnouncementHelper(neighborIp, storedAnnouncement) {
     const messageObject = {
         network: storedAnnouncement.network,
         netmask: storedAnnouncement.netmask,
-        ASPath: storedAnnouncement.updatedASPath,
+        ASPath: updatedASPath,
     }
     
     const objectToSend = {
@@ -31,16 +31,16 @@ function sendAnnouncementHelper(neighborIp, storedAnnouncement) {
     socketMap.get(neighborIp).send(infoToSend, portsMap.get(neighborIp), "127.0.0.1");
 }
 
-function handleHandshakeHelper(neighborIp, receivedInfo) {
+function handleUpdateHelper(neighborIp, receivedInfo) {
 
     // store the announcement into the announcementStorage
     const storedAnnouncement = {
-        network: receivedInfo.src,
-        netmask: receivedInfo.netmask,
-        localpref: receivedInfo.localpref,
-        selfOrigin: receivedInfo.selfOrigin,
-        ASPath: receivedInfo.ASPath,
-        origin: receivedInfo.origin,
+        network: receivedInfo.msg.network,
+        netmask: receivedInfo.msg.netmask,
+        localpref: receivedInfo.msg.localpref,
+        selfOrigin: receivedInfo.msg.selfOrigin,
+        ASPath: receivedInfo.msg.ASPath,
+        origin: receivedInfo.msg.origin,
         peer: neighborIp
     }
     announcementStorage.push(storedAnnouncement);
@@ -50,20 +50,19 @@ function handleHandshakeHelper(neighborIp, receivedInfo) {
 
     const typeOfAnnouncement = relationshipMap.get(neighborIp);
     //if is customer 
-    if(typeOfAnnouncement === "customer") {
+    if(typeOfAnnouncement === "cust") {
         // tell all neighbor
-        for(let i = 0; i < relationshipMap.size; i++) {
-            const anotherNeighbor = relationshipMap.keys()[i];
+
+        for(const [anotherNeighbor, relationship] of relationshipMap.entries()) {
             if(anotherNeighbor !== neighborIp) {
                 sendAnnouncementHelper(anotherNeighbor, storedAnnouncement);
-            }   
+            }
         }
     }
-    else if(typeOfAnnouncement === "peer" || typeOfAnnouncement === "provider") {
+    else if(typeOfAnnouncement === "peer" || typeOfAnnouncement === "prov") {
         // tell the customer
-        for(let i = 0; i < relationshipMap.size; i++) {
-            const anotherNeighbor = relationshipMap.keys()[i];
-            if(anotherNeighbor !== neighborIp && relationshipMap.get(anotherNeighbor) === "customer") {
+        for(const [anotherNeighbor, relationship] of relationshipMap.entries()) {
+            if(anotherNeighbor !== neighborIp && relationship === "cust") {
                 sendAnnouncementHelper(anotherNeighbor, storedAnnouncement);
             }
         }
@@ -76,7 +75,7 @@ function connectNeighborsHelper(neighborsInfo) {
         // save each neighbor'info into the corresponding map
         const splitByHyphen = neighborsInfo[i].split("-");
         const neighborIp = splitByHyphen[1];
-        const neighborPort = splitByHyphen[0];
+        const neighborPort = Number(splitByHyphen[0]);
         const neighborRelationship = splitByHyphen[2];
 
         portsMap.set(neighborIp, neighborPort);
@@ -85,28 +84,20 @@ function connectNeighborsHelper(neighborsInfo) {
     }
 
     //create a socket for each neighbor 
-    for(let i = 0; i < socketMap.length; i++) {
-        const neighborIp = socketMap.keys()[i];
+    for(const [neighborIp] of socketMap.entries()) {
 
         const hostIp = "127.0.0.1";
 
         const createdSocket = dgram.createSocket("udp4");
-
-        createdSocket.bind(portsMap.get(neighborIp), hostIp);
         socketMap.set(neighborIp, createdSocket);
 
-        //send handshake to the neighbor
-        sendHandshakeHelper(neighborIp);
-
         //make socket listen to the neighbor
-        createdSocket.on("message", (msg, neighborIp) => {
+        createdSocket.on("message", (msg) => {
             const receivedInfo = JSON.parse(msg.toString());
 
             // determine which operation the neighbor wants to perform
             const type = receivedInfo.type;
-            if(type === "handshake") {
-                handleHandshakeHelper(neighborIp, receivedInfo);
-            } else if(type === "update") {
+            if(type === "update") {
                 handleUpdateHelper(neighborIp, receivedInfo);
             } else if(type === "withdraw") {
                 handleWithdrawHelper(neighborIp, receivedInfo);
@@ -116,18 +107,23 @@ function connectNeighborsHelper(neighborsInfo) {
                 handleDumpHelper(neighborIp, receivedInfo);
             }
         });
+
+        // bind to port 0
+        createdSocket.bind(0, hostIp, function() {
+            sendHandshakeHelper(neighborIp);
+        });
     }
 }
 
 //the same ip number but the last number change from 2 to 1
-function srcConvertedHelper(asnNumber) {
-    const ipArray = asnNumber.split(".");
+function srcConvertedHelper(neighborIp) {
+    const ipArray = neighborIp.split(".");
     ipArray[3] = "1";
     return ipArray.join(".");
 }
 
 function sendHandshakeHelper(neighborIp) {
-    const srcConverted = srcConvertedHelper(asnNumber);
+    const srcConverted = srcConvertedHelper(neighborIp);
     const objectToSend = {
         src: srcConverted,
         dst: neighborIp,
@@ -141,7 +137,7 @@ function sendHandshakeHelper(neighborIp) {
 function getParamsHelper() {
     const gotParams = process.argv.slice(2);
 
-    asnNumber = gotParams[0];
+    asnNumber = Number(gotParams[0]);
 
     const neighborsInfo = [];
 
