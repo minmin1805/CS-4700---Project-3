@@ -16,6 +16,17 @@ maskMap.set("252", "11111100");
 maskMap.set("254", "11111110");
 maskMap.set("255", "11111111");
 
+const maskOnesMap = new Map();
+maskOnesMap.set("0", 0);
+maskOnesMap.set("128", 1);
+maskOnesMap.set("192", 2);
+maskOnesMap.set("224", 3);
+maskOnesMap.set("240", 4);
+maskOnesMap.set("248", 5);
+maskOnesMap.set("252", 6);
+maskOnesMap.set("254", 7);
+maskOnesMap.set("255", 8);
+
 
 
 const announcementStorage = [];
@@ -273,35 +284,52 @@ function checkPeerIpHelper(currentBestRoute, potentialRoute) {
     }
 }
 
+function maskOnesCounter(netmask) {
+    const counter = 0;
+    const netmaskArray = netmask.split(".");
+    for(let i = 0; i < 4; i++) {
+        counter += maskOnesMap.get(netmaskArray[i]);
+    }
+    return counter;
+}
+
 function rankingHelper(currentBestRoute, potentialRoute) {
-    // check localpref
-    if(currentBestRoute.localpref > potentialRoute.localpref) {
+
+    //add ranking using longest prefix match for level 5
+    const currentOnesCount = maskOnesCounter(currentBestRoute.netmask);
+    const potentialOnesCount = maskOnesCounter(potentialRoute.netmask);
+    if(currentOnesCount < potentialOnesCount) {
         return currentBestRoute;
     }
-    else if(currentBestRoute.localpref < potentialRoute.localpref) {
+    else if(currentOnesCount > potentialOnesCount) {
         return potentialRoute;
     }
-    else{
-        // check selfOrigin
-        const selfOriginWinner = checkSelfOriginHelper(currentBestRoute, potentialRoute);
-        if(selfOriginWinner !== null) {
-            return selfOriginWinner;
+    else {
+        // check localpref 
+        if(currentBestRoute.localpref > potentialRoute.localpref) {
+            return currentBestRoute;
+        }
+        else if(currentBestRoute.localpref < potentialRoute.localpref) {
+            return potentialRoute;
         }
         else {
-            // check ASPath (shorter wins)
-            const asPathWinner = checkASPathHelper(currentBestRoute, potentialRoute);
-            if(asPathWinner !== null) {
-                return asPathWinner;
+            // check selfOrigin
+            const selfOriginWinner = checkSelfOriginHelper(currentBestRoute, potentialRoute);
+            if(selfOriginWinner !== null) {
+                return selfOriginWinner;
             }
             else {
-                // check origin( IGP > EGP > UNK)
-                const originWinner = checkOriginHelper(currentBestRoute, potentialRoute);
-                if(originWinner !== null) {
-                    return originWinner;
+                // check ASPath (shorter wins)
+                const asPathWinner = checkASPathHelper(currentBestRoute, potentialRoute);
+                if(asPathWinner !== null) {
+                    return asPathWinner;
                 }
                 else {
-                    //compare lowest ip number
-                    return checkPeerIpHelper(currentBestRoute, potentialRoute);
+                    // check origin( IGP > EGP > UNK)
+                    const originWinner = checkOriginHelper(currentBestRoute, potentialRoute);
+                    if(originWinner !== null) {
+                        return originWinner;
+                    }
                 }
             }
         }
@@ -325,16 +353,7 @@ function helperToFindBestRoute(destinationId) {
     return currentBestRoute;
 }
 
-
-function handleDataHelper(neighborIp, receivedInfo) {
-    // level 1 version for now
-    // find the route that cover
-    const destinationId = receivedInfo.dst;
-
-    const bestRouteToSend = helperToFindBestRoute(destinationId);
-    if(bestRouteToSend === null) {
-        return;
-    }
+function sendDataHelper(neighborIp, receivedInfo, bestRouteIp) {
     const messageObject = {
         src: receivedInfo.src,
         dst: receivedInfo.dst,
@@ -342,7 +361,35 @@ function handleDataHelper(neighborIp, receivedInfo) {
         msg: receivedInfo.msg,
     }
     const infoToSend = JSON.stringify(messageObject);
-    socketMap.get(bestRouteToSend.peer).send(infoToSend, portsMap.get(bestRouteToSend.peer), "127.0.0.1");
+    socketMap.get(bestRouteIp).send(infoToSend, portsMap.get(bestRouteIp), "127.0.0.1");
+}
+
+function handleDataHelper(neighborIp, receivedInfo) {
+    // level 1 version for now
+    // find the route that cover
+    const destinationId = receivedInfo.dst;
+
+    const bestRouteToSend = helperToFindBestRoute(destinationId);
+    //if no route then send no route message
+    if(bestRouteToSend === null) {
+        noRouteHelper(neighborIp, receivedInfo.src);
+        return;
+    }
+
+    //check if sender is customer then send, if sender is peer or provider and receiver is peer or provider then send no route
+    const typeOfSender = relationshipMap.get(neighborIp);
+    const typeOfReceiver = relationshipMap.get(bestRouteToSend.peer);
+    if(typeOfSender === "cust") {
+        sendDataHelper(neighborIp, receivedInfo, bestRouteToSend.peer);
+    }
+    else if(typeOfSender === "peer" || typeOfSender === "prov") {
+        if(typeOfReceiver === "peer" || typeOfReceiver === "prov") {
+            noRouteHelper(neighborIp, receivedInfo.src);
+        }
+        else {
+            sendDataHelper(neighborIp, receivedInfo, bestRouteToSend.peer);
+        }
+    }
 }
 
 function handleDumpHelper(neighborIp, receivedInfo) {
@@ -369,7 +416,83 @@ function handleDumpHelper(neighborIp, receivedInfo) {
     }
     const infoToSend = JSON.stringify(objectToSend);
     socketMap.get(neighborIp).send(infoToSend, portsMap.get(neighborIp), "127.0.0.1");
+}
+
+function sendWithdrawHelper(neighborIp, routesToDelete) {
+
+    const messageObject = {
+        src: srcConvertedHelper(neighborIp),
+        dst: neighborIp,
+        type: "withdraw",
+        msg: routesToDelete,
     }
+    const infoToSend = JSON.stringify(messageObject);
+    socketMap.get(neighborIp).send(infoToSend, portsMap.get(neighborIp), "127.0.0.1");
+}
+
+function noRouteHelper(neighborIp, originalSrc) {
+    const messageObject = {
+        src: srcConvertedHelper(neighborIp),
+        dst: originalSrc,
+        type: "no route",
+        msg: {},
+    }
+    const infoToSend = JSON.stringify(messageObject);
+    socketMap.get(neighborIp).send(infoToSend, portsMap.get(neighborIp), "127.0.0.1");
+}
+
+function handleWithdrawHelper(neighborIp, receivedInfo) {
+    const announcementStorageV2 = [];
+    const listOfRoutesToDelete = [];
+
+    // there can be multiple routes to delete so use 2 for loops
+    for(let j = 0; j < announcementStorage.length; j++) {
+        const currentAnnouncement = announcementStorage[j];
+        let deleteOrNot = false;
+        for(let i = 0; i < receivedInfo.msg.length; i++) {
+            const currentToDelete = receivedInfo.msg[i];
+            //check if the peer matches with the ip of the one who sent the withdraw and if the network and netmask match one of the items in the list
+            if(currentAnnouncement.peer === neighborIp && currentAnnouncement.network === currentToDelete.network && currentAnnouncement.netmask === currentToDelete.netmask) {
+                deleteOrNot = true;
+            }
+        }
+        if(deleteOrNot == false) {
+            announcementStorageV2.push(currentAnnouncement);
+        }
+        else {
+            listOfRoutesToDelete.push({
+                network: currentAnnouncement.network,
+                netmask: currentAnnouncement.netmask,
+            });
+        }
+    }
+
+    announcementStorage.length = 0;
+    for(let i = 0; i < announcementStorageV2.length; i++) {
+        announcementStorage.push(announcementStorageV2[i]);
+    }
+
+    //if this is neighbor then tell everyone, if they are a peer or a provider then tell the customer
+    const typeOfAnnouncement = relationshipMap.get(neighborIp);
+    if(typeOfAnnouncement === "cust") {
+        // tell all neighbor
+
+        for(const [anotherNeighbor, relationship] of relationshipMap.entries()) {
+            if(anotherNeighbor !== neighborIp) {
+                sendWithdrawHelper(anotherNeighbor, listOfRoutesToDelete);
+            }
+        }
+    }
+    else if(typeOfAnnouncement === "peer" || typeOfAnnouncement === "prov") {
+        // tell the customer
+        for(const [anotherNeighbor, relationship] of relationshipMap.entries()) {
+            if(anotherNeighbor !== neighborIp && relationship === "cust") {
+                sendWithdrawHelper(anotherNeighbor, listOfRoutesToDelete);
+            }
+        }
+    }
+}
+
 
 
 function main() {
