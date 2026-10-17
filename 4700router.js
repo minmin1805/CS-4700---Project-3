@@ -210,11 +210,67 @@ function andMaskChecker(destinationId, network, netmask) {
 
 function ipToIntConverter(ip) {
     const ipArray = ip.split(".");
-    const value = 0;
+    let value = 0;
     for(let i = 0; i < 4; i++) {
         value += Number(ipArray[i]) * Math.pow(256, 3 - i);
     }
     return value;
+}
+
+function checkSelfOriginHelper(currentBestRoute, potentialRoute) {
+    if(currentBestRoute.selfOrigin == true && potentialRoute.selfOrigin == false) {
+        return currentBestRoute;
+    }
+    else if(currentBestRoute.selfOrigin == false && potentialRoute.selfOrigin == true) {
+        return potentialRoute;
+    }
+    else {
+        return null;
+    }
+}
+
+function checkASPathHelper(currentBestRoute, potentialRoute) {
+    if(currentBestRoute.ASPath.length < potentialRoute.ASPath.length) {
+        return currentBestRoute;
+    }
+    else if(currentBestRoute.ASPath.length > potentialRoute.ASPath.length) {
+        return potentialRoute;
+    }
+    else {
+        return null;
+    }
+}
+
+function checkOriginHelper(currentBestRoute, potentialRoute) {
+    if(currentBestRoute.origin == "IGP" && (potentialRoute.origin == "EGP" || potentialRoute.origin == "UNK")) {
+        return currentBestRoute;
+    }
+    else if(currentBestRoute.origin == "EGP" && potentialRoute.origin == "UNK") {
+        return currentBestRoute;
+    }
+    else if(potentialRoute.origin == "IGP" && (currentBestRoute.origin == "EGP" || currentBestRoute.origin == "UNK")) {
+        return potentialRoute;
+    }
+    else if(potentialRoute.origin == "EGP" && currentBestRoute.origin == "UNK") {
+        return potentialRoute;
+    }
+    else {
+        return null;
+    }
+}
+
+function checkPeerIpHelper(currentBestRoute, potentialRoute) {
+    const currentBestRouteNum = ipToIntConverter(currentBestRoute.peer);
+    const potentialRouteNum = ipToIntConverter(potentialRoute.peer);
+    if(currentBestRouteNum < potentialRouteNum) {
+        return currentBestRoute;
+    }
+    else if(currentBestRouteNum > potentialRouteNum) {
+        return potentialRoute;
+    }
+    else {
+        return currentBestRoute;
+    }
 }
 
 function rankingHelper(currentBestRoute, potentialRoute) {
@@ -226,50 +282,26 @@ function rankingHelper(currentBestRoute, potentialRoute) {
         return potentialRoute;
     }
     else{
-        
         // check selfOrigin
-        if(currentBestRoute.selfOrigin == true && potentialRoute.selfOrigin == false) {
-            return currentBestRoute;
-        }
-        else if(currentBestRoute.selfOrigin == false && potentialRoute.selfOrigin == true) {
-            return potentialRoute;
+        const selfOriginWinner = checkSelfOriginHelper(currentBestRoute, potentialRoute);
+        if(selfOriginWinner !== null) {
+            return selfOriginWinner;
         }
         else {
             // check ASPath (shorter wins)
-            if(currentBestRoute.ASPath.length < potentialRoute.ASPath.length) {
-                return currentBestRoute;
-            }
-            else if(currentBestRoute.ASPath.length > potentialRoute.ASPath.length) {
-                return potentialRoute;
+            const asPathWinner = checkASPathHelper(currentBestRoute, potentialRoute);
+            if(asPathWinner !== null) {
+                return asPathWinner;
             }
             else {
                 // check origin( IGP > EGP > UNK)
-                if(currentBestRoute.origin == "IGP" && (potentialRoute.origin == "EGP" || potentialRoute.origin == "UNK")) {
-                    return currentBestRoute;
-                }
-                else if(currentBestRoute.origin == "EGP" && potentialRoute.origin == "UNK") {
-                    return currentBestRoute;
-                }
-                else if(potentialRoute.origin == "IGP" && (currentBestRoute.origin == "EGP" || currentBestRoute.origin == "UNK")) {
-                    return potentialRoute;
-                }
-                else if(potentialRoute.origin == "EGP" && currentBestRoute.origin == "UNK") {
-                    return potentialRoute;
+                const originWinner = checkOriginHelper(currentBestRoute, potentialRoute);
+                if(originWinner !== null) {
+                    return originWinner;
                 }
                 else {
                     //compare lowest ip number
-                    // leave later for level 5
-                    const currentBestRouteNum = ipToIntConverter(currentBestRoute.peer);
-                    const potentialRouteNum = ipToIntConverter(potentialRoute.peer);
-                    if(currentBestRouteNum < potentialRouteNum) {
-                        return currentBestRoute;
-                    }
-                    else if(currentBestRouteNum > potentialRouteNum) {
-                        return potentialRoute;
-                    }
-                    else {
-                        return currentBestRoute;
-                    }
+                    return checkPeerIpHelper(currentBestRoute, potentialRoute);
                 }
             }
         }
