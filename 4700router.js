@@ -208,26 +208,136 @@ function andMaskChecker(destinationId, network, netmask) {
     return false;
 }
 
+function ipToIntConverter(ip) {
+    const ipArray = ip.split(".");
+    const value = 0;
+    for(let i = 0; i < 4; i++) {
+        value += Number(ipArray[i]) * Math.pow(256, 3 - i);
+    }
+    return value;
+}
+
+function rankingHelper(currentBestRoute, potentialRoute) {
+    // check localpref
+    if(currentBestRoute.localpref > potentialRoute.localpref) {
+        return currentBestRoute;
+    }
+    else if(currentBestRoute.localpref < potentialRoute.localpref) {
+        return potentialRoute;
+    }
+    else{
+        
+        // check selfOrigin
+        if(currentBestRoute.selfOrigin == true && potentialRoute.selfOrigin == false) {
+            return currentBestRoute;
+        }
+        else if(currentBestRoute.selfOrigin == false && potentialRoute.selfOrigin == true) {
+            return potentialRoute;
+        }
+        else {
+            // check ASPath (shorter wins)
+            if(currentBestRoute.ASPath.length < potentialRoute.ASPath.length) {
+                return currentBestRoute;
+            }
+            else if(currentBestRoute.ASPath.length > potentialRoute.ASPath.length) {
+                return potentialRoute;
+            }
+            else {
+                // check origin( IGP > EGP > UNK)
+                if(currentBestRoute.origin == "IGP" && (potentialRoute.origin == "EGP" || potentialRoute.origin == "UNK")) {
+                    return currentBestRoute;
+                }
+                else if(currentBestRoute.origin == "EGP" && potentialRoute.origin == "UNK") {
+                    return currentBestRoute;
+                }
+                else if(potentialRoute.origin == "IGP" && (currentBestRoute.origin == "EGP" || currentBestRoute.origin == "UNK")) {
+                    return potentialRoute;
+                }
+                else if(potentialRoute.origin == "EGP" && currentBestRoute.origin == "UNK") {
+                    return potentialRoute;
+                }
+                else {
+                    //compare lowest ip number
+                    // leave later for level 5
+                    const currentBestRouteNum = ipToIntConverter(currentBestRoute.peer);
+                    const potentialRouteNum = ipToIntConverter(potentialRoute.peer);
+                    if(currentBestRouteNum < potentialRouteNum) {
+                        return currentBestRoute;
+                    }
+                    else if(currentBestRouteNum > potentialRouteNum) {
+                        return potentialRoute;
+                    }
+                    else {
+                        return currentBestRoute;
+                    }
+                }
+            }
+        }
+    }
+}
+
+function helperToFindBestRoute(destinationId) {
+    let currentBestRoute = null;
+    for(let i  = 0; i < announcementStorage.length; i++) {
+        const announcement = announcementStorage[i];
+        if(andMaskChecker(destinationId, announcement.network, announcement.netmask)) {
+            if(currentBestRoute === null) {
+                currentBestRoute = announcement;
+            }
+            else {
+                currentBestRoute = rankingHelper(currentBestRoute, announcement);
+            }
+        }
+    }
+
+    return currentBestRoute;
+}
+
 
 function handleDataHelper(neighborIp, receivedInfo) {
     // level 1 version for now
     // find the route that cover
     const destinationId = receivedInfo.dst;
+
+    const bestRouteToSend = helperToFindBestRoute(destinationId);
+    if(bestRouteToSend === null) {
+        return;
+    }
+    const messageObject = {
+        src: receivedInfo.src,
+        dst: receivedInfo.dst,
+        type: "data",
+        msg: receivedInfo.msg,
+    }
+    const infoToSend = JSON.stringify(messageObject);
+    socketMap.get(bestRouteToSend.peer).send(infoToSend, portsMap.get(bestRouteToSend.peer), "127.0.0.1");
+}
+
+function handleDumpHelper(neighborIp, receivedInfo) {
+    // for now get all the announcement from the announcementStorage
+    const messageObject = [];
     for(let i = 0; i < announcementStorage.length; i++) {
         const announcement = announcementStorage[i];
-        if(andMaskChecker(destinationId, announcement.network, announcement.netmask)) {
-            const messageObject = {
-                src: receivedInfo.src,
-                dst: receivedInfo.dst,
-                type: "data",
-                msg: receivedInfo.msg,
-            }
-            const infoToSend = JSON.stringify(messageObject);
-            socketMap.get(announcement.peer).send(infoToSend, portsMap.get(announcement.peer), "127.0.0.1");
-            break;
+        const announcementCopy = {
+            network: announcement.network,
+            netmask: announcement.netmask,
+            localpref: announcement.localpref,
+            selfOrigin: announcement.selfOrigin,
+            ASPath: announcement.ASPath,
+            origin: announcement.origin,
+            peer: announcement.peer,
         }
+        messageObject.push(announcementCopy);
     }
-}
+    const objectToSend = {
+        src: srcConvertedHelper(neighborIp),
+        dst: neighborIp,
+        type: "table",
+        msg: messageObject,
+    }
+    const infoToSend = JSON.stringify(objectToSend);
+    socketMap.get(neighborIp).send(infoToSend, portsMap.get(neighborIp), "127.0.0.1");
+    }
 
 
 function main() {
